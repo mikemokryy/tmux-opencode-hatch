@@ -6,6 +6,8 @@
 #                       async initial load and by the ctrl-x reload).
 #   picker.sh --copy <text>
 #                       copy <text> to the clipboard (used by ctrl-y).
+#   picker.sh --delete <session-id> <pid>
+#                       delete one session via the service (ctrl-x).
 #   picker.sh --preview <pane>
 #                       capture <pane> without its trailing blank lines, which
 #                       would otherwise leave fzf's `follow` scrolled onto padding.
@@ -51,6 +53,26 @@ if [ "${1:-}" = '--copy' ]; then
   exit 0
 fi
 
+# --delete <session-id> <pid>
+# Remove the selected session (and its child sessions) from the OpenCode
+# service. A row without a session id is a live TUI with nothing stored yet, so
+# fall back to killing that process.
+if [ "${1:-}" = '--delete' ]; then
+  sid="${2:-}"
+  pid="${3:-}"
+  if [ -n "$sid" ] && [ "$sid" != "-" ]; then
+    # shellcheck source=api.sh
+    . "$DIR/api.sh"
+    if opencode_api_delete "/api/session/$sid" >/dev/null 2>&1; then
+      exit 0
+    fi
+    tmux display-message "tmux-opencode-hatch: could not delete $sid" 2>/dev/null
+    exit 1
+  fi
+  [ -n "$pid" ] && [ "$pid" != "-" ] && kill "$pid" 2>/dev/null
+  exit 0
+fi
+
 for tool in fzf jq "$(get_tmux_option @opencode_command 'opencode')"; do
   command -v "$tool" >/dev/null 2>&1 || {
     tmux display-message "tmux-opencode-hatch: $tool is required for the picker"
@@ -80,15 +102,15 @@ if [ "$(get_tmux_option @opencode_picker_cache 'on')" = on ] &&
   sync_opts=(--bind "load:unbind(load)+reload-sync($self --list)")
 fi
 
-# ctrl-x kills the OpenCode process itself: a dedicated session dies with its
-# last window, while a loose pane keeps the shell that hosted it. The reload
-# waits a beat so the process is gone by the time agents.sh looks for it.
+# ctrl-x deletes the selected session through the service, so only that session
+# (and its child sessions) goes away — not the other sessions sharing the TUI.
+# The reload waits a beat for the delete to settle before agents.sh looks again.
 # ctrl-y copies the agent's location (session:window.pane, e.g.
 # opencode-88074b0e:0.0) and closes the picker.
 sel=$("${list_cmd[@]}" | fzf --ansi --delimiter='\t' --with-nth=7,8,5,9,11 \
-  --reverse --cycle --header='OpenCode agents · enter: jump · ctrl-x: kill · ctrl-y: copy' \
+  --reverse --cycle --header='OpenCode agents · enter: jump · ctrl-x: delete · ctrl-y: copy' \
   --preview="$self --preview {2}" --preview-window='up,70%,follow' \
-  --bind="ctrl-x:execute-silent(kill {3})+reload(sleep 0.3; $self --list)" \
+  --bind="ctrl-x:execute-silent($self --delete {5} {3})+reload(sleep 0.3; $self --list)" \
   --bind="ctrl-y:execute-silent($self --copy {10})+abort" \
   --bind='change:first' \
   ${sync_opts[@]+"${sync_opts[@]}"} \

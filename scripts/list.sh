@@ -18,7 +18,7 @@ me="${1:-}"
 my_session="$(tmux list-clients -F '#{client_name} #{session_name}' 2>/dev/null |
   awk -v me="$me" '$1 == me { print $2; exit }')"
 
-title=" Sessions "
+title=" OpenCode "
 
 # open_picker <host>  — show the picker popup on <host>, or on the default client
 # when <host> is empty. Returns display-popup's own exit status.

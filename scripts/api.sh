@@ -34,7 +34,14 @@ opencode_service_file() {
 # <directory> scopes location-bound endpoints (permissions, forms) via the
 # x-opencode-directory header; without it the server answers for its own cwd.
 opencode_api_http() {
-  local path="$1" dir="${2:-}" svc url pw user
+  opencode_api_call GET "$@"
+}
+
+# opencode_api_call <method> <path> [directory]
+# One request against the running service. Prints the body, or fails. DELETE
+# answers 204 with an empty body, which is a success here.
+opencode_api_call() {
+  local method="$1" path="$2" dir="${3:-}" svc url pw user
   svc="$(opencode_service_file)"
   [ -r "$svc" ] || return 1
   command -v curl >/dev/null 2>&1 || return 1
@@ -43,10 +50,16 @@ opencode_api_http() {
   user="${OPENCODE_SERVER_USERNAME:-opencode}"
   [ -n "$url" ] && [ -n "$pw" ] || return 1
   if [ -n "$dir" ]; then
-    curl -fsS -m 3 -u "$user:$pw" -H "x-opencode-directory: $dir" "$url$path" 2>/dev/null
+    curl -fsS -m 3 -X "$method" -u "$user:$pw" -H "x-opencode-directory: $dir" "$url$path" 2>/dev/null
   else
-    curl -fsS -m 3 -u "$user:$pw" "$url$path" 2>/dev/null
+    curl -fsS -m 3 -X "$method" -u "$user:$pw" "$url$path" 2>/dev/null
   fi
+}
+
+# opencode_api_delete <path>
+# DELETE <path>. Prints the body (usually empty); fails on a non-2xx answer.
+opencode_api_delete() {
+  opencode_api_call DELETE "$1"
 }
 
 # opencode_api_cli <path>

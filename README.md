@@ -45,8 +45,8 @@ runs; a tiny shell watcher forwards bells.
   popup over it.
 - **A launcher** (`prefix` + `y`) that opens/attaches an OpenCode session for the
   current directory.
-- **Quick kill** (`ctrl-x`) of a TUI from the picker (it closes every session
-  that TUI has open).
+- **Quick delete** (`ctrl-x`) of the highlighted session (its child sessions too)
+  from the picker.
 - **Copy location** (`ctrl-y`) — puts an agent's `session:window.pane` target
   on the clipboard, ready for `tmux send-keys -t` and friends.
 - **Bell forwarding** — a bell in a dedicated session highlights the window you
@@ -106,7 +106,7 @@ Inside the picker:
 | Key                       | Action                                                                         |
 | ------------------------- | ------------------------------------------------------------------------------ |
 | `enter`                   | Jump to the selected session                                                  |
-| `ctrl-x`                  | Kill the TUI hosting the highlighted session (all its tabs)                    |
+| `ctrl-x`                  | Delete the highlighted session (and its child sessions)                        |
 | `ctrl-y`                  | Copy the highlighted agent's location (e.g. `opencode-88074b0e:0.0`) and close |
 | `↑` / `↓`, type to filter | fzf navigation                                                                 |
 
