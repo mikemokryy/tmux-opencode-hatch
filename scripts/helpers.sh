@@ -40,8 +40,10 @@ file_mtime() {
 
 # picker_cache_path
 # The picker's first-frame cache. One per user, shared by every tmux server.
+# Bump the vN suffix whenever the row format changes: a stale cache would
+# otherwise be painted with the new field mapping until the first reload.
 picker_cache_path() {
-  printf '%s' "${TMPDIR:-/tmp}/tmux-opencode-agents-$(id -u).cache"
+  printf '%s' "${TMPDIR:-/tmp}/tmux-opencode-agents-v5-$(id -u).cache"
 }
 
 # copy_to_clipboard <text>

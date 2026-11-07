@@ -38,18 +38,22 @@ trap "rm -rf '$lock'" EXIT
 trap 'exit 0' INT TERM
 
 # resolve <status-tsv> <dir>
-# Echo "<session-id>\t<status>" for the session a TUI in <dir> is most likely
-# running: a waiting/busy session wins, then the most recently updated.
+# Echo "<session-id>\t<status>" for the directory as a whole. Several sessions can
+# share a directory (e.g. several tabs in one TUI), so aggregate instead of
+# picking one: waiting wins over busy, and otherwise the most recently updated
+# session's status stands in. This keeps a waiting session from being masked by
+# a busy one.
 resolve() {
   printf '%s\n' "$1" | awk -F'\t' -v d="$2" '
     $4 != d { next }
-    {
-      live = ($2 == "waiting" || $2 == "busy") ? 1 : 0
-      if (!have || (live && !have_live) || (live == have_live && $3 + 0 > up)) {
-        sid = $1; status = $2; up = $3 + 0; have = 1; have_live = live
-      }
+    $2 == "waiting" && !waiting { wsid = $1; waiting = 1 }
+    $2 == "busy" && !busy { bsid = $1; busy = 1 }
+    !have || $3 + 0 > up { sid = $1; status = $2; up = $3 + 0; have = 1 }
+    END {
+      if (waiting) print wsid "\t" "waiting"
+      else if (busy) print bsid "\t" "busy"
+      else if (have) print sid "\t" status
     }
-    END { if (have) print sid "\t" status }
   '
 }
 

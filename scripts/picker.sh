@@ -10,11 +10,15 @@
 #                       capture <pane> without its trailing blank lines, which
 #                       would otherwise leave fzf's `follow` scrolled onto padding.
 #
-# Rows come from agents.sh, which pairs each live OpenCode session with the tmux
-# pane it occupies. Two kinds of row jump differently:
+# Rows come from agents.sh, one per real OpenCode session, paired with the tmux
+# pane whose directory hosts it. Two kinds of row jump differently:
 #   dedicated  an OpenCode in an `opencode-*` session this plugin launched —
 #              resumed in the popup, over the window it was launched from.
 #   loose      an OpenCode TUI running in any other pane — focused in place.
+# Before jumping, the selected session's tab is selected inside the existing TUI
+# (its tab binds are Ctrl+1..0), so several sessions sharing one TUI land on the
+# chosen one rather than whichever tab the TUI happened to show. Best-effort: the
+# switch is skipped for tab 11+ and when several TUIs share the directory.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=helpers.sh
@@ -81,11 +85,11 @@ fi
 # waits a beat so the process is gone by the time agents.sh looks for it.
 # ctrl-y copies the agent's location (session:window.pane, e.g.
 # opencode-88074b0e:0.0) and closes the picker.
-sel=$("${list_cmd[@]}" | fzf --ansi --delimiter='\t' --with-nth=5,6,7,8 \
+sel=$("${list_cmd[@]}" | fzf --ansi --delimiter='\t' --with-nth=7,8,5,9,11 \
   --reverse --cycle --header='OpenCode agents · enter: jump · ctrl-x: kill · ctrl-y: copy' \
   --preview="$self --preview {2}" --preview-window='up,70%,follow' \
   --bind="ctrl-x:execute-silent(kill {3})+reload(sleep 0.3; $self --list)" \
-  --bind="ctrl-y:execute-silent($self --copy {7})+abort" \
+  --bind="ctrl-y:execute-silent($self --copy {10})+abort" \
   --bind='change:first' \
   ${sync_opts[@]+"${sync_opts[@]}"} \
   ${extra_opts[@]+"${extra_opts[@]}"})
@@ -93,9 +97,29 @@ sel=$("${list_cmd[@]}" | fzf --ansi --delimiter='\t' --with-nth=5,6,7,8 \
 [ -z "$sel" ] && exit 0
 pane=$(printf '%s' "$sel" | cut -f2)
 kind=$(printf '%s' "$sel" | cut -f4)
+tabpos=$(printf '%s' "$sel" | cut -f6)
 
 parent=$(tmux show-options -gqv @opencode_parent 2>/dev/null)
 session=$(tmux display-message -p -t "$pane" '#{session_name}' 2>/dev/null)
+
+# select_tab <n>
+# Make the TUI in this pane show its 1-based tab <n>. The default tab binds are
+# Ctrl+1..9 (Ctrl+0 for tab 10), which a terminal encodes with the kitty keyboard
+# protocol, so that sequence is sent straight to the pane. Best-effort: a TUI
+# that does not understand it simply stays on its current tab, and the jump is
+# unaffected.
+select_tab() {
+  local n="$1" cp seq
+  case "$n" in '' | *[!0-9]*) return 0 ;; esac
+  [ "$n" -ge 1 ] && [ "$n" -le 10 ] || return 0
+  if [ "$n" -eq 10 ]; then cp=48; else cp=$((48 + n)); fi
+  seq="$(printf '\033[%d;5u' "$cp")"
+  tmux send-keys -t "$pane" -l -- "$seq" 2>/dev/null
+  sleep 0.1
+}
+
+# Switch the existing TUI to the selected session's tab first, then move to it.
+select_tab "$tabpos"
 
 if [ "$kind" = loose ]; then
   # Focus the pane in place on the outer client. This popup closes on its own

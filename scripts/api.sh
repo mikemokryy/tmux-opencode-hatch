@@ -82,7 +82,10 @@ opencode_fetch() {
 
 # opencode_status_tsv [fallback]
 # One line per stored session:
-#   session-id \t status \t updated-epoch-seconds \t directory
+#   session-id \t status \t updated-epoch-seconds \t directory \t title \t parent-id
+#
+# `parent-id` is set for child sessions (subagents); only rows for root sessions
+# belong in the picker.
 #
 # Status priority:
 #   waiting  a permission request or a question is pending
@@ -145,9 +148,37 @@ opencode_status_tsv() {
        else "idle" end) as $status
     | [$id, $status,
        (($s.time.updated // $s.time.created // 0) / 1000 | floor),
-       ($s.location.directory // "")] | @tsv
+       ($s.location.directory // ""),
+       (($s.title // "")
+         | gsub("[\t\r\n]+"; " ")
+         | if length > 40 then .[0:39] + "…" else . end),
+       ($s.parentID // "")] | @tsv
   ' 2>/dev/null
   rc=$?
   rm -rf "$d"
   return "$rc"
+}
+
+# opencode_tabs_tsv
+# One line per OpenCode tab currently open in a TUI:
+#   directory \t session-id \t title
+#
+# The TUI records the tabs it has open in its own state file, keyed by working
+# directory. That is not part of the HTTP API and may move between versions, so
+# this is best-effort: callers fall back to the session list when it is missing
+# or unreadable. Only directories with a live TUI pane are used, so stale
+# entries left by closed TUIs are ignored.
+opencode_tabs_tsv() {
+  local base="${XDG_STATE_HOME:-$HOME/.local/state}/opencode" f
+  for f in "$base/latest/tui/tabs.json" "$base"/*/tui/tabs.json; do
+    [ -r "$f" ] || continue
+    jq -r '
+      (.cwd // {}) | to_entries[] | .key as $d | .value.tabs[]?
+      | [$d, .sessionID,
+         ((.title // "")
+           | gsub("[\t\r\n]+"; " ")
+           | if length > 40 then .[0:39] + "…" else . end)] | @tsv
+    ' "$f" 2>/dev/null && return 0
+  done
+  return 0
 }

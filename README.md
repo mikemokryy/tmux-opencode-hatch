@@ -4,10 +4,10 @@ A tmux plugin that runs an [OpenCode](https://opencode.ai) session in a popup fo
 each project directory. Open the hatch, hand OpenCode the work, close it and get
 back to your editor. Each session lives in its own nested tmux session, so
 closing the hatch never interrupts it. When you want to check in, an `fzf`
-picker lists every running session, shows what each one is doing, and jumps you
-straight to it. And when a session finishes or needs your attention, it rings a
-bell that highlights the window you launched it from — so you know where to go
-without even opening the picker.
+picker lists every OpenCode session in your TUIs, shows what each one is doing,
+and jumps you straight to it. And when a session finishes or needs your
+attention, it rings a bell that highlights the window you launched it from — so
+you know where to go without even opening the picker.
 
 Simple by design: it's just a few shell scripts. No hooks to install, no
 JavaScript plugin. Status comes from the background service OpenCode already
@@ -33,17 +33,20 @@ runs; a tiny shell watcher forwards bells.
 
 ## Features
 
-- **A central picker** (`prefix` + `u`) listing every running OpenCode agent —
-  several in one project, and any running loose in an ordinary pane.
+- **A central picker** (`prefix` + `u`) listing every OpenCode session open in
+  your TUIs — several in one project directory, and any running loose in an
+  ordinary pane.
 - **Live status** per agent — `working` / `waiting` / `idle`, plus `error` when a
   turn failed — read from the OpenCode service that all TUIs already talk to. No
   setup.
 - **A live preview** of each agent's screen right in the picker.
-- **Smart jump** — selecting an agent switches your client to the window it
-  was launched from, then resumes it in a popup over it.
+- **Smart jump** — selecting an agent switches its TUI to that session's tab,
+  moves your client to the window it was launched from, then resumes it in a
+  popup over it.
 - **A launcher** (`prefix` + `y`) that opens/attaches an OpenCode session for the
   current directory.
-- **Quick kill** (`ctrl-x`) of a finished agent from the picker.
+- **Quick kill** (`ctrl-x`) of a TUI from the picker (it closes every session
+  that TUI has open).
 - **Copy location** (`ctrl-y`) — puts an agent's `session:window.pane` target
   on the clipboard, ready for `tmux send-keys -t` and friends.
 - **Bell forwarding** — a bell in a dedicated session highlights the window you
@@ -102,18 +105,33 @@ Inside the picker:
 
 | Key                       | Action                                                                         |
 | ------------------------- | ------------------------------------------------------------------------------ |
-| `enter`                   | Jump to the agent                                                              |
-| `ctrl-x`                  | Kill the highlighted agent                                                     |
+| `enter`                   | Jump to the selected session                                                  |
+| `ctrl-x`                  | Kill the TUI hosting the highlighted session (all its tabs)                    |
 | `ctrl-y`                  | Copy the highlighted agent's location (e.g. `opencode-88074b0e:0.0`) and close |
 | `↑` / `↓`, type to filter | fzf navigation                                                                 |
 
 Agents needing your attention (`waiting`, `idle`) sort to the top. Set
 `@opencode_sort 'recent'` to sort by last activity instead, regardless of status.
 
-Every running OpenCode gets its own row. A dedicated session is found through the
-tmux session this plugin created; a TUI you started by hand in an ordinary pane
-shows up as `loose`. Sessions are paired with their tmux pane by working
-directory, so a freshly started TUI shows `?` until its first session exists.
+Every OpenCode session gets its own row, identified by its real `ses_...` id.
+Rows are the tabs the TUI has open in that directory — a session that is not open
+as a tab is not listed, even if it was used recently. Child sessions (subagents)
+are skipped. When a directory reports no tab state at all (a fresh TUI, or the
+state file is unavailable), running sessions and sessions used within
+`@opencode_session_ttl` stand in; if none match, its most recently updated root
+session is shown. A dedicated session is found through the tmux session this
+plugin created; a TUI you started by hand in an ordinary pane shows up as
+`loose`. Sessions are paired with their tmux pane by working directory, so a
+freshly started TUI shows `?` until its first session exists. The API exposes no
+pane or tty, so rows for the same directory share one underlying pane; selecting
+a row first switches that TUI to the session's tab (its default `Ctrl+1`…`Ctrl+0`
+tab binds), then jumps to the pane, so multiple tabs in one TUI land on the one
+you chose.
+
+The tab switch is best-effort: it assumes the default tab binds, and is skipped
+for the 11th tab and beyond, and when more than one TUI shares the directory
+(the TUI state file is keyed by directory, so the index cannot be attributed).
+In those cases the jump still lands on the pane, showing its current tab.
 
 ### How status works
 
@@ -124,16 +142,22 @@ to it. The plugin reads that service through its discovery file
 | Question | Endpoint |
 | -------- | -------- |
 | Which sessions are running? | `GET /api/session/active` |
+| Which tabs are open in a TUI? | the TUI's `tabs.json` state file |
 | Is a permission pending? | `GET /api/permission/request` |
 | Is a question pending? | `GET /api/form` |
 | What is this session's title / directory / last activity? | `GET /api/session` |
 
 This is what replaces Claude Code's `claude agents` command. There is no pid or
 tty in the API, so the plugin joins sessions to tmux panes by
-`location.directory` ↔ `pane_current_path` instead. Permissions and forms are
-location-scoped upstream, so they are queried once per directory that has a
-running session (a request without a location answers for the service's own
-cwd). At most the newest 200 stored sessions are considered.
+`location.directory` ↔ `pane_current_path` instead. Rows come from the tabs the
+TUI reports as open, or — when a directory reports no tab state — running or
+recently used root sessions, and each is identified by its real `ses_...` id.
+Status is aggregated per directory for bells
+(`waiting` wins over `busy`, then the most recent session), so one waiting
+session cannot hide behind a busy one. Permissions and forms are location-scoped
+upstream, so they are queried once per directory that has a running session (a
+request without a location answers for the service's own cwd). At most the newest
+200 stored sessions are considered.
 
 > **Note:** the HTTP API is documented by OpenCode as *experimental*. All access
 > lives in [`scripts/api.sh`](./scripts/api.sh), so a schema change has one place
@@ -156,10 +180,16 @@ set -g @opencode_popup_height   '90%'        # popup height
 set -g @opencode_fzf_options    ''           # extra options passed to the fzf picker
 set -g @opencode_picker_cache   'on'         # paint the picker's first frame from a cache
 set -g @opencode_sort           'status'     # picker order: 'status' or 'recent'
+set -g @opencode_session_ttl    '6h'         # no-tab fallback window: sessions used this recently (0 = no recency window)
 set -g @opencode_forward_bell   'on'         # highlight the origin window on a bell
 set -g @opencode_watch          'on'         # poll status, forward bells, refresh cache
 set -g @opencode_poll_interval  '2'          # seconds between status polls
 ```
+
+`@opencode_session_ttl` accepts a duration suffix (`30m`, `6h`, `1d`) or a plain
+number of seconds. It only applies to a directory whose TUI reports no open tabs;
+`0` limits that fallback to running sessions, with the most recently updated
+session in the directory as the last resort.
 
 For example, to auto-approve permissions in launched sessions:
 
