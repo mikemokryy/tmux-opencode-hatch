@@ -114,19 +114,20 @@ Agents needing your attention (`waiting`, `idle`) sort to the top. Set
 `@opencode_sort 'recent'` to sort by last activity instead, regardless of status.
 
 Every OpenCode session gets its own row, identified by its real `ses_...` id.
-Rows are the tabs the TUI has open in that directory — a session that is not open
-as a tab is not listed, even if it was used recently. Child sessions (subagents)
-are skipped. When a directory reports no tab state at all (a fresh TUI, or the
-state file is unavailable), running sessions and sessions used within
-`@opencode_session_ttl` stand in; if none match, its most recently updated root
-session is shown. A dedicated session is found through the tmux session this
-plugin created; a TUI you started by hand in an ordinary pane shows up as
-`loose`. Sessions are paired with their tmux pane by working directory, so a
-freshly started TUI shows `?` until its first session exists. The API exposes no
-pane or tty, so rows for the same directory share one underlying pane; selecting
-a row first switches that TUI to the session's tab (its default `Ctrl+1`…`Ctrl+0`
-tab binds), then jumps to the pane, so multiple tabs in one TUI land on the one
-you chose.
+Rows are the tabs the TUI has open in that directory, or — when no tab is
+listable — the directory's root sessions. In both cases a session must be either
+running now (`waiting`/`busy`) or updated within `@opencode_session_ttl`; an
+older tab stays reachable inside the TUI but drops out of the picker, and a tab
+whose session was deleted disappears even if the TUI state file still mentions
+it. A session that is not open as a tab is not listed while a listable tab
+exists. Child sessions (subagents) are skipped. A dedicated session is found
+through the tmux session this plugin created; a TUI you started by hand in an
+ordinary pane shows up as `loose`. Sessions are paired with their tmux pane by
+working directory, so a live TUI shows `?` until it has a listable session. The
+API exposes no pane or tty, so rows for the same directory share one underlying
+pane; selecting a row first switches that TUI to the session's tab (its default
+`Ctrl+1`…`Ctrl+0` tab binds), then jumps to the pane, so multiple tabs in one TUI
+land on the one you chose.
 
 The tab switch is best-effort: it assumes the default tab binds, and is skipped
 for the 11th tab and beyond, and when more than one TUI shares the directory
@@ -150,8 +151,8 @@ to it. The plugin reads that service through its discovery file
 This is what replaces Claude Code's `claude agents` command. There is no pid or
 tty in the API, so the plugin joins sessions to tmux panes by
 `location.directory` ↔ `pane_current_path` instead. Rows come from the tabs the
-TUI reports as open, or — when a directory reports no tab state — running or
-recently used root sessions, and each is identified by its real `ses_...` id.
+TUI reports as open, or — when no tab is listable — running or recently used root
+sessions, and each is identified by its real `ses_...` id.
 Status is aggregated per directory for bells
 (`waiting` wins over `busy`, then the most recent session), so one waiting
 session cannot hide behind a busy one. Permissions and forms are location-scoped
@@ -180,16 +181,17 @@ set -g @opencode_popup_height   '90%'        # popup height
 set -g @opencode_fzf_options    ''           # extra options passed to the fzf picker
 set -g @opencode_picker_cache   'on'         # paint the picker's first frame from a cache
 set -g @opencode_sort           'status'     # picker order: 'status' or 'recent'
-set -g @opencode_session_ttl    '6h'         # no-tab fallback window: sessions used this recently (0 = no recency window)
+set -g @opencode_session_ttl    '12h'        # hide sessions not updated in this window (0 = only running sessions)
 set -g @opencode_forward_bell   'on'         # highlight the origin window on a bell
 set -g @opencode_watch          'on'         # poll status, forward bells, refresh cache
 set -g @opencode_poll_interval  '2'          # seconds between status polls
 ```
 
-`@opencode_session_ttl` accepts a duration suffix (`30m`, `6h`, `1d`) or a plain
-number of seconds. It only applies to a directory whose TUI reports no open tabs;
-`0` limits that fallback to running sessions, with the most recently updated
-session in the directory as the last resort.
+`@opencode_session_ttl` accepts a duration suffix (`30m`, `12h`, `1d`) or a plain
+number of seconds. It applies to every row source, open tabs included: an idle
+session older than the window is hidden. Sessions that are `waiting` or `busy`
+are always shown, however old, and `0` limits the picker to those running
+sessions.
 
 For example, to auto-approve permissions in launched sessions:
 

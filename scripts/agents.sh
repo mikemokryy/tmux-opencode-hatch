@@ -14,11 +14,13 @@
 # Rows are defined by real OpenCode sessions (`ses_...`), not by the generated
 # tmux session name (a hash of the directory). The TUI records the tabs it has
 # open in its own state file, and those tabs are authoritative for the pane whose
-# working directory matches. Only when a directory reports no tab state (a fresh
-# TUI, or the state file is unavailable) do active root sessions, then recently
-# used ones, then the most recently updated one stand in. Child sessions
-# (subagents) are skipped. The API has no pane/tty, so rows for one directory
-# share one jump target.
+# working directory matches. Only when a pane has no listable tab to show (a
+# fresh TUI, the state file is unavailable, every open tab is stale, or the tabs
+# were already claimed by another pane in the same directory) do root sessions
+# from the directory stand in. Every row source passes the same listable() gate:
+# a session is shown only when it is active now or was updated within
+# @opencode_session_ttl. Child sessions (subagents) are skipped. The API has no
+# pane/tty, so rows for one directory share one jump target.
 #
 #   Row: rank \t pane_id \t pid \t kind \t sid \t tabpos \t icon \t age \t title \t loc \t path
 #   rank/pane_id/pid/kind/tabpos/loc are hidden from the display via fzf's --with-nth.
@@ -32,13 +34,13 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 prefix="$(get_tmux_option @opencode_session_prefix 'opencode-')"
 
 # ttl_seconds <value>
-# Parse the fallback window into seconds: a plain number of seconds, or a
-# duration with an s/m/h/d suffix (90m, 6h, 1d). Anything invalid falls back to
-# the 6h default. 0 limits the fallback to active sessions.
+# Parse the recency window into seconds: a plain number of seconds, or a
+# duration with an s/m/h/d suffix (90m, 12h, 1d). Anything invalid falls back to
+# the 12h default. 0 limits the picker to active sessions.
 ttl_seconds() {
   local v="$1" n unit
   case "$v" in
-  '' | *[!0-9smhd]*) printf '%s' 21600; return ;;
+  '' | *[!0-9smhd]*) printf '%s' 43200; return ;;
   esac
   unit="${v: -1}"
   case "$unit" in
@@ -46,7 +48,7 @@ ttl_seconds() {
   *) n="$v"; unit=s ;;
   esac
   case "$n" in
-  '' | *[!0-9]*) printf '%s' 21600; return ;;
+  '' | *[!0-9]*) printf '%s' 43200; return ;;
   esac
   case "$unit" in
   s) printf '%s' "$n" ;;
@@ -56,10 +58,10 @@ ttl_seconds() {
   esac
 }
 
-# Fallback window (seconds) for directories that report no open tabs. Active
-# sessions are always listed there; recently used ones within this window too.
-# Directories with open tabs are unaffected.
-ttl="$(ttl_seconds "$(get_tmux_option @opencode_session_ttl '6h')")"
+# Recency window (seconds) applied to every row source, open tabs included.
+# Active sessions are always listed; otherwise a session must have been updated
+# within this window. 0 limits the picker to active sessions.
+ttl="$(ttl_seconds "$(get_tmux_option @opencode_session_ttl '12h')")"
 
 # The picker is user-initiated, so allow the documented CLI fallback here. The
 # watcher deliberately does not: `opencode api` starts the service when it is down.
@@ -136,11 +138,23 @@ fi
     return proc
   }
 
+  # listable <session-id>
+  # The single gate for every row source. A session belongs in the picker only
+  # when the API knows it, it is a root session, and it is either active now or
+  # was updated within the recency window. A tab whose session is gone from the
+  # API (deleted, or outside the newest 200) or is older than the window is
+  # therefore hidden, even while the TUI still reports the tab.
+  function listable(id) {
+    return id != "" && (id in st) && sparent[id] == "" &&
+      (st[id] == "waiting" || st[id] == "busy" ||
+       (ttl > 0 && now - upd[id] <= ttl))
+  }
+
   # emit <tty> <session-id> [fallback-title] [tab-position]
   # Print one picker row for <session-id> on the pane. An empty id means the pane
-  # is live but has no stored session yet (shown as "?"). <fallback-title> is used
-  # when the session is not in the API list (e.g. a tab whose session aged out).
-  # <tab-position> is the 1-based tab index in the TUI (0 when not a tab).
+  # is live but has no listable session (shown as "?"). <fallback-title> fills in
+  # when the API title is empty. <tab-position> is the 1-based tab index in the
+  # TUI (0 when not a tab).
   function emit(tty, sid, ftitle, tabpos,   status, icon, rank, secs, mins, age, t, p, s) {
     status = (sid != "" && (sid in st)) ? st[sid] : "unknown"
 
@@ -157,7 +171,7 @@ fi
     else if (mins < 2880)  age = int(mins / 60) "h"
     else                   age = int(mins / 1440) "d"
 
-    t = (sid != "" && (sid in stitle)) ? stitle[sid] : ftitle
+    t = (sid != "" && (sid in stitle) && stitle[sid] != "") ? stitle[sid] : ftitle
     if (t == "") t = "-"
     s = (sid == "") ? "-" : sid
 
@@ -203,7 +217,7 @@ fi
     for (i = 0; i < npane; i++) {
       tty = pane_order[i]
       sid = tui_sid[tty]
-      if (sid == "" || !(sid in st)) continue
+      if (!listable(sid)) continue
       pid = agent_pid(tty)
       if (pid == "") continue
       d = path[tty]
@@ -217,11 +231,13 @@ fi
     }
 
     # Pass 2: pair the remaining panes by working directory. The tabs the TUI
-    # reports for that directory are authoritative: a session that is not open
-    # as a tab is not listed. When a directory has no tab state at all (fresh
-    # TUI, or the state file is unavailable), fall back to active root sessions,
-    # optionally recently used ones, then the most recent root session. A session
-    # is claimed by the first pane that shows it, so rows never duplicate.
+    # reports for that directory are authoritative: a listable tab is listed and
+    # a stale tab is skipped. When no listable tab is left (fresh TUI, state file
+    # unavailable, or all tabs outside the window), fall back to active or recent
+    # root sessions in the directory. A session is claimed by the first pane that
+    # shows it, so rows never duplicate. There is deliberately no last-resort
+    # "newest root session" row: after a delete that would surface an old session
+    # that the recency window is meant to hide.
     for (i = 0; i < npane; i++) {
       tty = pane_order[i]
       if (tty in pinned) continue
@@ -233,6 +249,7 @@ fi
       for (j = 1; j <= tn[d]; j++) {
         id = tid[d, j]
         if (id in claimed) continue
+        if (!listable(id)) continue
         tp = (panes_in[d] <= 1) ? j : 0
         emit(tty, id, ttitle[d, j], tp)
         claimed[id] = 1
@@ -243,9 +260,7 @@ fi
       n = 0
       for (j = 0; j < nsess; j++) {
         id = sess_order[j]
-        if (id != "" && sdir[id] == d && !(id in claimed) && sparent[id] == "" &&
-            (st[id] == "waiting" || st[id] == "busy" ||
-             (ttl > 0 && now - upd[id] <= ttl)))
+        if (sdir[id] == d && !(id in claimed) && listable(id))
           sel[++n] = id
       }
       for (k = 1; k <= n; k++) {
@@ -254,22 +269,7 @@ fi
       }
       if (n > 0) continue
 
-      # Nothing recent either: the most recently updated root session in the
-      # directory stands in.
-      best = ""
-      for (j = 0; j < nsess; j++) {
-        id = sess_order[j]
-        if (id != "" && sdir[id] == d && !(id in claimed) && sparent[id] == "" &&
-            (best == "" || upd[id] > upd[best]))
-          best = id
-      }
-      if (best != "") {
-        emit(tty, best, "", 0)
-        claimed[best] = 1
-        continue
-      }
-
-      # A live TUI whose session is not in the API yet, or whose sessions were
+      # A live TUI with no listable session yet, or whose listable sessions were
       # already claimed by another pane in the same directory.
       emit(tty, "", "", 0)
     }
