@@ -76,12 +76,13 @@ tabs_tsv="$(opencode_tabs_tsv)"
 # themselves. `ps` gives a bare tty name (ttys001); tmux gives /dev/ttys001.
 ps_out="$(ps -axo pid=,tty=,command= 2>/dev/null)"
 
-# status: rank asc (what needs you floats up), then age asc so whatever just went
-# idle sits at the top of its group. recent: age asc alone.
-if [ "$(get_tmux_option @opencode_sort 'status')" = recent ]; then
-  sort_keys='-k1,1n'
-else
+# recent: age asc (the session that moved most recently is first). status: rank
+# asc (what needs you floats up), then age asc so whatever just went idle sits at
+# the top of its group. Anything other than "status" uses the time order.
+if [ "$(get_tmux_option @opencode_sort 'recent')" = status ]; then
   sort_keys='-k2,2n -k1,1n'
+else
+  sort_keys='-k1,1n -k2,2n'
 fi
 
 {

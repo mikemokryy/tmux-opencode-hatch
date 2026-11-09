@@ -110,8 +110,9 @@ Inside the picker:
 | `ctrl-y`                  | Copy the highlighted agent's location (e.g. `opencode-88074b0e:0.0`) and close |
 | `↑` / `↓`, type to filter | fzf navigation                                                                 |
 
-Agents needing your attention (`waiting`, `idle`) sort to the top. Set
-`@opencode_sort 'recent'` to sort by last activity instead, regardless of status.
+Sessions sort by last activity, most recent first. Set `@opencode_sort 'status'`
+to float agents needing your attention (`waiting`, then `idle`) to the top
+instead.
 
 Every OpenCode session gets its own row, identified by its real `ses_...` id.
 Rows are the tabs the TUI has open in that directory, or — when no tab is
@@ -180,7 +181,7 @@ set -g @opencode_popup_width    '90%'        # popup width
 set -g @opencode_popup_height   '90%'        # popup height
 set -g @opencode_fzf_options    ''           # extra options passed to the fzf picker
 set -g @opencode_picker_cache   'on'         # paint the picker's first frame from a cache
-set -g @opencode_sort           'status'     # picker order: 'status' or 'recent'
+set -g @opencode_sort           'recent'     # picker order: 'recent' or 'status'
 set -g @opencode_session_ttl    '12h'        # hide sessions not updated in this window (0 = only running sessions)
 set -g @opencode_forward_bell   'on'         # highlight the origin window on a bell
 set -g @opencode_watch          'on'         # poll status, forward bells, refresh cache
