@@ -43,7 +43,7 @@ file_mtime() {
 # Bump the vN suffix whenever the row format or the row filtering changes: a
 # stale cache would otherwise show outdated rows until the first reload.
 picker_cache_path() {
-  printf '%s' "${TMPDIR:-/tmp}/tmux-opencode-agents-v6-$(id -u).cache"
+  printf '%s' "${TMPDIR:-/tmp}/tmux-opencode-agents-v7-$(id -u).cache"
 }
 
 # copy_to_clipboard <text>

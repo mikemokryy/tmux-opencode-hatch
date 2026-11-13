@@ -124,7 +124,9 @@ it. A session that is not open as a tab is not listed while a listable tab
 exists. Child sessions (subagents) are skipped. A dedicated session is found
 through the tmux session this plugin created; a TUI you started by hand in an
 ordinary pane shows up as `loose`. Sessions are paired with their tmux pane by
-working directory, so a live TUI shows `?` until it has a listable session. The
+working directory; a pane with no listable session contributes no row at all, so
+an abandoned popup, a moved project directory, or a TUI whose sessions all aged
+out of the window never shows as an empty placeholder row. The
 API exposes no pane or tty, so rows for the same directory share one underlying
 pane; selecting a row first switches that TUI to the session's tab (its default
 `Ctrl+1`…`Ctrl+0` tab binds), then jumps to the pane, so multiple tabs in one TUI

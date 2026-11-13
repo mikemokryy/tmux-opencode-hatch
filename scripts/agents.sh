@@ -14,13 +14,18 @@
 # Rows are defined by real OpenCode sessions (`ses_...`), not by the generated
 # tmux session name (a hash of the directory). The TUI records the tabs it has
 # open in its own state file, and those tabs are authoritative for the pane whose
-# working directory matches. Only when a pane has no listable tab to show (a
-# fresh TUI, the state file is unavailable, every open tab is stale, or the tabs
-# were already claimed by another pane in the same directory) do root sessions
-# from the directory stand in. Every row source passes the same listable() gate:
-# a session is shown only when it is active now or was updated within
+# working directory matches. Only when a pane has no listable tab to show (the
+# state file is unavailable, every open tab is stale, or the tabs were already
+# claimed by another pane in the same directory) do root sessions from the
+# directory stand in. Every row source passes the same listable() gate: a
+# session is shown only when it is active now or was updated within
 # @opencode_session_ttl. Child sessions (subagents) are skipped. The API has no
 # pane/tty, so rows for one directory share one jump target.
+#
+# A pane with no listable session contributes no row at all. It must also host a
+# live OpenCode process: a dedicated pane cannot fall back to its shell wrapper,
+# so abandoned popups, moved directories, and sessions aged out of the window
+# never show up as placeholder rows.
 #
 #   Row: rank \t pane_id \t pid \t kind \t sid \t tabpos \t icon \t age \t title \t loc \t path
 #   rank/pane_id/pid/kind/tabpos/loc are hidden from the display via fzf's --with-nth.
@@ -116,26 +121,20 @@ fi
       print "O\t" pid "\t" tty "\t" sid
     }
   '
-  tmux list-panes -a -F $'T\t#{pane_tty}\t#{pane_id}\t#{pane_pid}\t#{session_name}\t#{pane_current_path}\t#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null
+  tmux list-panes -a -F $'T\t#{pane_tty}\t#{pane_id}\t#{session_name}\t#{pane_current_path}\t#{session_name}:#{window_index}.#{pane_index}' 2>/dev/null
   [ -n "$tabs_tsv" ] && printf '%s\n' "$tabs_tsv" | sed $'s/^/B\t/'
   printf '%s\n' "$status_tsv" | sed $'s/^/S\t/'
 } | awk -F'\t' -v now="$(date +%s)" -v home="$HOME" -v prefix="$prefix" -v ttl="$ttl" '
   # agent_pid <tty>
   # The process representing the agent in this pane, or "" when the pane has no
-  # live OpenCode. Sets kind for the row. A dedicated pane prefers the OpenCode
-  # child (e.g. `fish -c opencode`) so ctrl-x kills the TUI itself, and falls
-  # back to the pane wrapper process.
+  # live OpenCode TUI. Sets kind for the row. A pane only lists when it hosts an
+  # OpenCode process: the wrapper (e.g. `fish -c opencode`) is not enough, so a
+  # popup whose TUI exited never produces a row.
   function agent_pid(tty,   proc) {
-    if (index(sess[tty], prefix) == 1) {
-      proc = tui_pid[tty]
-      if (proc == "") proc = ppid[tty]
-      if (proc == "" || !(proc in alive)) return ""
-      kind = "dedicated"
-    } else {
-      proc = tui_pid[tty]
-      if (proc == "") return ""
-      kind = "loose"
-    }
+    proc = tui_pid[tty]
+    if (proc == "" || !(proc in alive)) return ""
+    if (index(sess[tty], prefix) == 1) kind = "dedicated"
+    else kind = "loose"
     return proc
   }
 
@@ -152,10 +151,10 @@ fi
   }
 
   # emit <tty> <session-id> [fallback-title] [tab-position]
-  # Print one picker row for <session-id> on the pane. An empty id means the pane
-  # is live but has no listable session (shown as "?"). <fallback-title> fills in
-  # when the API title is empty. <tab-position> is the 1-based tab index in the
-  # TUI (0 when not a tab).
+  # Print one picker row for <session-id> on the pane. <session-id> is always a
+  # real session that passed listable(). <fallback-title> fills in when the API
+  # title is empty. <tab-position> is the 1-based tab index in the TUI (0 when
+  # not a tab).
   function emit(tty, sid, ftitle, tabpos,   status, icon, rank, secs, mins, age, t, p, s) {
     status = (sid != "" && (sid in st)) ? st[sid] : "unknown"
 
@@ -163,7 +162,7 @@ fi
     else if (status == "idle")    { icon = "\033[32m●\033[0m idle   "; rank = 1 }  # green  - done, your turn
     else if (status == "busy")    { icon = "\033[31m●\033[0m working"; rank = 3 }  # red    - busy, leave it
     else if (status == "error")   { icon = "\033[35m●\033[0m error  "; rank = 2 }  # magenta - last turn failed
-    else                          { icon = "\033[90m●\033[0m   ?    "; rank = 2 }  # grey   - no session yet
+    else                          { icon = "\033[90m●\033[0m   ?    "; rank = 2 }  # grey   - unknown status
 
     secs = (sid != "" && (sid in upd)) ? now - upd[sid] : 1e12
     mins = int(secs / 60)
@@ -187,7 +186,7 @@ fi
   $1 == "O" { tui_pid[$3] = $2; tui_sid[$3] = $4; next }
   $1 == "T" {
     tty = $2; sub(/^\/dev\//, "", tty)
-    pane[tty] = $3; ppid[tty] = $4; sess[tty] = $5; path[tty] = $6; loc[tty] = $7
+    pane[tty] = $3; sess[tty] = $4; path[tty] = $5; loc[tty] = $6
     pane_order[npane++] = tty
     next
   }
@@ -233,10 +232,12 @@ fi
 
     # Pass 2: pair the remaining panes by working directory. The tabs the TUI
     # reports for that directory are authoritative: a listable tab is listed and
-    # a stale tab is skipped. When no listable tab is left (fresh TUI, state file
+    # a stale tab is skipped. When no listable tab is left (state file
     # unavailable, or all tabs outside the window), fall back to active or recent
     # root sessions in the directory. A session is claimed by the first pane that
-    # shows it, so rows never duplicate. There is deliberately no last-resort
+    # shows it, so rows never duplicate. A pane left with nothing listable emits
+    # no row at all, so an abandoned or freshly opened TUI stays out of the
+    # picker until it has a real session. There is deliberately no last-resort
     # "newest root session" row: after a delete that would surface an old session
     # that the recency window is meant to hide.
     for (i = 0; i < npane; i++) {
@@ -268,11 +269,6 @@ fi
         emit(tty, sel[k], "", 0)
         claimed[sel[k]] = 1
       }
-      if (n > 0) continue
-
-      # A live TUI with no listable session yet, or whose listable sessions were
-      # already claimed by another pane in the same directory.
-      emit(tty, "", "", 0)
     }
   }
 ' | sort -t$'\t' $sort_keys | cut -f2-
